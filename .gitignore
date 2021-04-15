@@ -3,3 +3,6 @@ SVMatrixGenerator/**.tsv
 SVMatrixGenerator/**.csv
 SVMatrixGenerator/**.bedpe
 SVMatrixGenerator/**.txt
+**.ipynb
+
+
