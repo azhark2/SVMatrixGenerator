@@ -262,15 +262,8 @@ def processBEDPE(df):
     else:
         svclass = list(df["svclass"])
 
-    # if list(df["sample"])[0] == "MESO_003_T1":
-    #     print("FUCK YES")
-    #     df.to_csv("/Users/azhark/iCloud/dev/SVMatrixGenerator/results/FUCKING_BUG.tsv", sep="\t")
-
     #GET SIZE
     sizes = [0 for x in svclass]
-    # print(len(sizes))
-    # print(df.shape)
-    #f.write(len(sizes))
     i=-1
     for row in df.itertuples():
         i=i+1
@@ -291,7 +284,6 @@ def processBEDPE(df):
                 sizes[i] = size
             else:
                 size = ">10Mb"
-                #print(row)
                 sizes[i] = size
         else:
             sizes[i] = "0"
@@ -386,55 +378,58 @@ def tsv2matrix(original_df, annotated_df):
     samples = annotated_df["sample"].unique()
     features = ['clustered_del_1-10Kb', 'clustered_del_10-100Kb', 'clustered_del_100Kb-1Mb', 'clustered_del_1Mb-10Mb', 'clustered_del_>10Mb', 'clustered_tds_1-10Kb', 'clustered_tds_10-100Kb', 'clustered_tds_100Kb-1Mb', 'clustered_tds_1Mb-10Mb', 'clustered_tds_>10Mb', 'clustered_inv_1-10Kb', 'clustered_inv_10-100Kb', 'clustered_inv_100Kb-1Mb', 'clustered_inv_1Mb-10Mb', 'clustered_inv_>10Mb', 'clustered_trans', 'non-clustered_del_1-10Kb', 'non-clustered_del_10-100Kb', 'non-clustered_del_100Kb-1Mb', 'non-clustered_del_1Mb-10Mb', 'non-clustered_del_>10Mb', 'non-clustered_tds_1-10Kb', 'non-clustered_tds_10-100Kb', 'non-clustered_tds_100Kb-1Mb', 'non-clustered_tds_1Mb-10Mb', 'non-clustered_tds_>10Mb', 'non-clustered_inv_1-10Kb', 'non-clustered_inv_10-100Kb', 'non-clustered_inv_100Kb-1Mb', 'non-clustered_inv_1Mb-10Mb', 'non-clustered_inv_>10Mb', 'non-clustered_trans']
 
-    # with open('/Users/azhark/iCloud/dev/SVMatrixGenerator/RS32_features.txt') as f:
-    #     next(f)
-    #     for line in f:
-    #         features.append(line.strip())
     arr = np.zeros((32, len(samples)), dtype='int')
     nmf_matrix = pd.DataFrame(arr, index=features, columns=samples)
-
+    nmf_matrix.info()
     #record the classification for all the individual breakpoints(clustered, non-clustered, etc.)
     breakpointToAnnot = {}
     for row in annotated_df.itertuples():
         breakpointToAnnot[(row.sample, row.chrom, row.start)] = row.Annotation
 
+    svclass_mapping = {"deletion":"del", "tandem-duplication":"tds", "inversion":"inv", "translocation":"trans"}
+    svclass2 = [svclass_mapping[x] for x in original_df.svclass]
+    original_df.svclass=svclass2
 
-    # svclass_mapping = {"translocation":"trans", "deletion":"del", "inversion":"inv", "tandem-duplication":"tds"}
-    # svclass2 = [svclass_mapping[x] for x in list(original_df.svclass)]
-    # original_df["svclass"] = svclass2
     #go through original bedpe, look up annotation, and fill in matrix
     for row in original_df.itertuples():
-        b1 = (row.sample, row.chrom1, row.start1)
-        b2 = (row.sample, row.chrom2, row.start2)
         channel1 = ''
         channel2 = ''
+        b1 = (row.sample, row.chrom1, row.start1)
+        b2 = (row.sample, row.chrom2, row.start2)
+
         if b1 in breakpointToAnnot:
             if breakpointToAnnot[b1] == "clustered:NC" or  breakpointToAnnot[b1] == 'clustered:C':
                 if row.svclass != "trans": #size has to be taken into account
                     channel1 = "clustered_" + row.svclass + "_" + row.size_bin
                 else:
                     channel1 = "clustered_" + row.svclass
-            else:
+            else: #
                 if row.svclass != "trans":
-                    channel1 = "non-clustered_" + row.svclass + "_" + row.size_bin
+                    channel = "non-clustered_" + row.svclass + "_" + row.size_bin
                 else:
-                    channel1 = "non-clustered_" + row.svclass
+                    channel = "non-clustered_" + row.svclass
         if b2 in breakpointToAnnot:
             if breakpointToAnnot[b2] == "clustered:NC" or  breakpointToAnnot[b2] == 'clustered:C':
                 if row.svclass != "trans": #size has to be taken into account
                     channel2 = "clustered_" + row.svclass + "_" + row.size_bin
                 else:
-                    channel2 = "clustered_" + row.svclass
+                    channel = "clustered_" + row.svclass
             else:
                 if row.svclass != "trans":
-                    channel2 = "non-clustered_" + row.svclass + "_" + row.size_bin
+                    channel = "non-clustered_" + row.svclass + "_" + row.size_bin
                 else:
                     channel2 = "non-clustered_" + row.svclass
-        else: #if the event is not annotated, than assume that it is non-clustered
+        if b1 not in breakpointToAnnot and b2 not in breakpointToAnnot: #if the event is not annotated, than assume that it is non-clustered
             if row.svclass != "trans":
                 channel = "non-clustered_" + row.svclass + "_" + row.size_bin
             else:
                 channel = "non-clustered_" + row.svclass
+
+        #if either breakpoint in he pair of breakpints is annotated as clustered, the enitre event is considered clustered
+        if channel1 != '':
+            channel=channel1
+        if channel2 != '':
+            channel=channel2
 
         if channel1.split("_")[0] == "clustered":
             channel = channel1
@@ -444,9 +439,8 @@ def tsv2matrix(original_df, annotated_df):
 
     nmf_matrix.index.name = 'Mutation Types'
     nmf_matrix.reindex([features]).reset_index()
-    return nmf_matrix
 
-m  = tsv2matrix(df, annotated_df)
+    return nmf_matrix
 
 counts = {} #master dictionary that stores sample: channel
 #sample_files = ["~/iCloud/dev/SVMatrixGenerator/data/560_Breast/PD8660a2.560_breast.rearrangements.n560.bedpe.tsv"]
@@ -503,6 +497,7 @@ if __name__ == "__main__":
     #file = "/Users/azhark/iCloud/dev/HRD-Signatures/data/560_Breast/560_breast.rearrangements.bedpe"
     #file = "/Users/azhark/iCloud/dev/SVMatrixGenerator/data/PCAWG/SV/MELA-AU_SV.bedpe.tsv"
     data = pd.read_csv(file, sep="\t") #bedpe file format: chrom1, start1, end1, chrom2, start2, end2, strand1, strand2, svclass(optional), sample
+    data = processBEDPE(data)
     print("Creating structural variant matrix for the " + str(data["sample"].nunique()) + " samples in " + project)
     with open(output_path + project + '.SV32.log', 'w') as f: #log file which contains information about results
         for sample in data["sample"].unique():
