@@ -5,4 +5,5 @@ SVMatrixGenerator/**.bedpe
 SVMatrixGenerator/**.txt
 **.ipynb
 
-
+data/**
+results/**
