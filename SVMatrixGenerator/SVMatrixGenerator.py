@@ -30,6 +30,8 @@ from scipy.stats import chisquare
 import scipy.stats as stats
 import seaborn as sns
 import fastrand
+import pickle
+from statistics import mode
 
 # Rearrangement signatures. Clustered vs non-clustered rearrangements. We sought
 # to separate rearrangements that occurred as focal catastrophic events or focal driver
@@ -83,10 +85,26 @@ with open("/Users/azhark/iCloud/dev/SVMatrixGenerator/data/chr_sizes.txt") as f:
         (key, val) = line.split('\t')
         ranges[str(key)] = val
 
+# def getMedianIMD():
+#     df = pd.read_csv("", sep="\t")
+#     df = processBEDPE(df)
+#     computeIMD()
+
 #keep everything the same except the genomic location of SV event
 def simulateBedpe(input_df, n, chromosome):
+    """This is the summary line
+
+    This is the further elaboration of the docstring. Within this section,
+    you can elaborate further on details as appropriate for the situation.
+    Notice that the summary and the elaboration is separated by a blank new
+    line.
+    """
+
     sim_dfs = []
     end = int(ranges[str(chromosome)])
+    #end = abs(np.max(np.array(input_df.start1)) -  np.min(np.array(input_df.start1)))
+    # if input_df.shape[0] <= 3 or end <= 3:
+    #   return [input_df]
     for i in range(n):
         sim_df = input_df.copy()
         r=-1
@@ -98,31 +116,13 @@ def simulateBedpe(input_df, n, chromosome):
 
             #once you have the new start coordinate, where to put the end coordinate so that resolution and length is preserved?
             new_coord = end+1
-            while new_coord + row["length"] >= end or new_coord + offset1 + row["length"] >= end:
+            while new_coord + row.length >= end or new_coord + offset1 + row.length >= end:
                 new_coord = fastrand.pcg32bounded(end) #Fast random number generation in Python using PCG
             sim_df.iat[r, 1] = new_coord
             sim_df.iat[r, 2] = new_coord + offset1
-            sim_df.iat[r, 4] = new_coord + row["length"]
+            sim_df.iat[r, 4] = new_coord + row.length
             sim_df.iat[r, 5] = new_coord + offset2
-            # if (row["svclass"] != "trans"):
-            #     if new_coord + row["length"] <= end: #if you don't go off end of chromosome
-            #         sim_df.iat[i, 1] = new_coord
-            #         sim_df.iat[i, 2] = new_coord + offset1
-            #         sim_df.iat[i, 4] = new_coord + row["length"]
-            #         sim_df.iat[i, 5] = new_coord + offset2
-            #     else: #you go off end of chromosome
-            #         sim_df.iat[i, 4] = new_coord
-            #         sim_df.iat[i, 5] = new_coord + offset2
-            #         sim_df.iat[i, 1] = new_coord - row["length"]
-            #         sim_df.iat[i, 2] = new_coord + offset1
-            # else: #we are dealing with a translocation and the breakpoints are on another chromosome
-            #     if sim_df[sim_df.columns[0]].nunique() == 1 and row["chrom1"] != row["chrom2"]:
-            #         sim_df.iat[i, 1] = new_coord
-            #         sim_df.iat[i, 2] = new_coord + offset1
-            #     else:
-            #         sim_df.iat[i, 4] = new_coord
-            #         sim_df.iat[i, 5] = new_coord + offset1
-        #recompute simulated lengths and make sure they are the same as actual
+
         lengths = []
         for row in sim_df.itertuples():
             lengths.append(abs(row.start1 - row.start2))
@@ -135,7 +135,10 @@ def simulateBedpe(input_df, n, chromosome):
     return sim_dfs
 
 #distance in bp to nearest breakpoint that is not it's partner (not distance to breakpoint immediately preceding)
-def computeIMD(chrom_df):
+def computeIMD(chrom_df, chromosome):
+
+    
+
     #keep track of partners
     d1 = dict(zip(list(chrom_df['start1']), list(chrom_df['start2'])))
     d2 = dict(zip(list(chrom_df['start2']), list(chrom_df['start1'])))
@@ -149,14 +152,20 @@ def computeIMD(chrom_df):
     rb = pd.DataFrame(np.concatenate((rb.values, rest.values), axis=1))
 
     #BREAKPOINTS ARE CONSIDERED INDIVIDUALLY
+
+    #['chrom1', 'start1', 'end1', 'chrom2', 'start2', 'end2', 'sample', 'svclass', 'size_bin', 'length']
     lb.columns = ['chrom1', 'start1', 'sample', 'svclass', 'size_bin', "length"]
     rb.columns = ['chrom2', 'start2', 'sample', 'svclass', 'size_bin', "length"]
 
     chr_lb = lb[lb.chrom1 == chromosome]
     chr_rb = rb[rb.chrom2 == chromosome]
+    # print(chr_lb)
+    # print(chr_rb)
     chrom_df = pd.DataFrame(np.concatenate((chr_lb.values, chr_rb.values), axis=0))
     chrom_df.columns = ['chrom', 'start', 'sample', 'svclass', 'size_bin', "length"]
-    assert(chrom_df['chrom'].nunique() == 1)
+
+    # print(chrom_df['chrom'].unique())
+    #assert(chrom_df['chrom'].nunique() == 1)
 
     #sort on last column which is start coordinate
     chrom_df = chrom_df.sort_values(chrom_df.columns[1]) #CHROM, START
@@ -165,8 +174,7 @@ def computeIMD(chrom_df):
 
     chrom_inter_distances = []
 
-    #defined as the number of base pairs from one rearrangement breakpoint to the one immediately preceding it in the reference genome
-
+    #defined as the number of base pairs from one rearrangement breakpoint to the one closest to it that is not it's partner
     for i in range(1, len(coords)-1):
         j = i-1
         k = i+1
@@ -175,14 +183,24 @@ def computeIMD(chrom_df):
         while k < len(coords) and coords[k] == d[coords[i]]:
             k=k+1
         if j >= 0 and k < len(coords):
-            dist = min(coords[i] - coords[j], coords[k] - coords[i])
+            if coords[i] - coords[j] == 0:
+                dist = coords[k] - coords[i]
+            elif coords[k] - coords[i] == 0:
+                dist = coords[i] - coords[j]
+            else:
+                dist = min(coords[i] - coords[j], coords[k] - coords[i])
         elif j < 0:
             dist = coords[k] - coords[i]
         else:
             dist = coords[i] - coords[j]
+
+        if dist == 0:
+            print(coords[j], coords[i], coords[k])
+            print(len(coords))
         chrom_inter_distances.append(dist)
 
     #now we take care of the edge cases of the first and last breakpoint
+
     if coords[1] == d[coords[0]]:
         first_dist = coords[2] - coords[0]
     else:
@@ -197,7 +215,7 @@ def computeIMD(chrom_df):
     chrom_inter_distances.append(last_dist)
     chrom_df['IMD'] = chrom_inter_distances
 
-    # #INTERLEAVED VS NESTED CONFIGURATION
+    #INTERLEAVED VS NESTED CONFIGURATION
     configuration = ['interleaved' for i in range(len(coords))]
     for i in range(1, len(coords)):
         j = i-1
@@ -212,8 +230,10 @@ def computeIMD(chrom_df):
 
 #reformat input bedpe files
 def processBEDPE(df):
+    """A simple function that process a given bedpe file produced by an SV caller"""
+    
     #CHECK FORMAT OF CHROMOSOME COLUMN ("chr1" vs. "1"), needs to be the latter
-    if df['chrom1'][1].startswith("chr"):
+    if df['chrom1'][0].startswith("chr"):
         chrom1 = []
         chrom2 = []
         for a, b in zip(df['chrom1'], df['chrom2']):
@@ -245,16 +265,16 @@ def processBEDPE(df):
             for row in df.itertuples():
                 if row.chrom1 != row.chrom2:
                     sv = "translocation"
-                    svclass.append("trans")
+                    svclass.append(sv)
                 elif row.strand1 == '+' and row.strand2 == '-' or row.strand1 == '-' and row.strand2 == '+':
                     sv = "inversion"
-                    svclass.append("inv")
+                    svclass.append(sv)
                 elif row.strand1 == '+' and row.strand2 == '+':
                     sv = "deletion"
-                    svclass.append("del")
+                    svclass.append(sv)
                 elif row.strand1 == '-' and row.strand2 == '-':
                     sv = "tandem-duplication"
-                    svclass.append("tds")
+                    svclass.append(sv)
                 else:
                     raise Exception("cannot classify rearrangements: svclass column missing, and cannot compute it because strand1 and strand2 are not in the proper format.")
             #f.write(svclass)
@@ -298,14 +318,24 @@ def processBEDPE(df):
 #currently does not use copy number calls
 #applies ShatterSeek statistical criteria
 def detectChromothripsis(segment_df):
+    """This is the summary line
+
+    This is the further elaboration of the docstring. Within this section,
+    you can elaborate further on details as appropriate for the situation.
+    Notice that the summary and the elaboration is separated by a blank new
+    line.
+    """
+
     equal_dist = False #EQUAL DISTRIBUTION of event classes
     total_events = segment_df.shape[0]
+    #print(total_events)
     events = set(["inversion", "translocation", "deletion", "tandem-duplication"])
     event_counts = segment_df["svclass"].value_counts()
 
     for e in events: #in case any classes of events are missing entirely
         if e not in event_counts.keys():
             event_counts[e] = 0
+    #print(event_counts)
     expected = [round(total_events / 4) for x in events]
     observed = np.array(list(event_counts.values))
     #print(observed)
@@ -315,7 +345,13 @@ def detectChromothripsis(segment_df):
     #     t, pvalue = chisquare(observed, expected)
     t, pvalue = chisquare(observed, expected)
     equal_dist_p.append(pvalue)
-    if pvalue > 0.05:
+
+    #record the p value for equal distribution of events
+    equal_dist_pval = []
+    for i in range(segment_df.shape[0]):
+        equal_dist_pval.append(pvalue)
+
+    if pvalue >= 0.05:
         equal_dist = True
 
     #determine what proportion of events are in a interleaved configuration
@@ -326,7 +362,14 @@ def detectChromothripsis(segment_df):
     else:
         frac_interleaved = 1
 
-    interleaved_frac.append(frac_interleaved)
+    #print(frac_interleaved)
+
+    #record the fraction of events on this chromosome
+    interleaved_frac = []
+    for i in range(segment_df.shape[0]):
+        interleaved_frac.append(frac_interleaved)
+    #print(interleaved_frac)
+
     if frac_interleaved >=interleaved_cutoff and equal_dist: #equal distribution of events, majority interleaved, + clustered = chromothripsis
         annotation = ['clustered:C' for i in range(segment_df.shape[0])]
         #f.write("These clustered events can likely be attributed to chromothripsis")
@@ -335,46 +378,72 @@ def detectChromothripsis(segment_df):
         annotation = ['clustered:NC' for i in range(segment_df.shape[0])]
 
     segment_df['Annotation'] = annotation
+    segment_df["interleaved_frac"] = interleaved_frac
+    segment_df["equal_dist_pval"] = equal_dist_pval
     return segment_df
 
 #construct rainfall plot of SV's on chromosome
-def plotIMD(imd, sim_imd, sample, chromosome, output_path):
-    #sizes  = {"0": 60, '>10Mb':np.float16(50), '1Mb-10Mb':np.float16(40), '1-10Kb':np.float16(10), '100kb-1Mb':np.float16(30), '10-100kb':np.float16(20)}
+def plotIMD(sampleToEvents, output_path): #sampleToEvents contains sample: (imd_df, sim_df, model)
+    """This is the summary line
+
+    This is the further elaboration of the docstring. Within this section,
+    you can elaborate further on details as appropriate for the situation.
+    Notice that the summary and the elaboration is separated by a blank new
+    line.
+    """
+
     sizes  = {"0":60, '>10Mb':50, '1Mb-10Mb':40, '1-10Kb':10, '100Kb-1Mb':30, '10-100Kb':20}
     size_order = ['1-10Kb', '10-100Kb', '100Kb-1Mb', '1Mb-10Mb', '>10Mb', "0"]
-    #imd.columns = ['chrom', 'Genomic Coordinate', 'sample', 'svclass', 'size_bin', 'log IMD']
-    #f.write(imd.dtypes)
-    #sim_imd = pd.read_csv(file + '.simulated', sep="\t")
-    #sim_imd.columns = ['chrom', 'Genomic Coordinate', 'sample', 'svclass', 'size_bin', 'log IMD']
 
     #log IMD for plotting purposes
-    if imd.shape[0] > 0:
-        pp = PdfPages(output_path + sample + '_IMD_plots' + '.pdf')
-        #take the log of the IMD for plotting purposes only
-        log_imd = [np.log(float(x)) for x in np.array(imd["IMD"])]
-        imd['log IMD'] = log_imd
-        log_imd = [np.log(float(x)) for x in np.array(sim_imd["IMD"])]
-        sim_imd['log IMD'] = log_imd
+    for k,v in sampleToEvents.items(): #(sample: (list of annotated dataframes for each chromosome, list of simulated dataframes, pcf model object))
+        sample = k
+        annotated_dfs = v[0] #list of each chromosome's annotated df required for plotting
+        sim_imds = v[1] #list of each chromosome's simulated df required for plotting
+        plotting_models = v[2] #list of each chromosome's pcf model object containing segmentations
+        pp = PdfPages(output_path + sample + '_IMD_plots' + '.pdf') #multi-page pdf, one for each chromosome
+        for imd, sim_imd, model in zip(annotated_dfs, sim_imds, plotting_models): #for each chromsome for this particular sample
+            labels=[]
+            chromosome = mode(list(imd["chrom"]))
+            if imd.shape[0] > 0: #it's possible a chromosome has no rearrangements
+            #take the log of the IMD for plotting purposes only
+                # log_imd = [np.log(float(x)) for x in np.array(imd["IMD"])]
+                # imd['log IMD'] = log_imd
+                # log_imd = [np.log(float(x)) for x in np.array(sim_imd["IMD"])]
+                # sim_imd['log IMD'] = log_imd
 
-        #imd.columns = ['chrom', 'Genomic Coordinate', 'sample', 'svclass', 'size_bin', 'log IMD']
-        fig, axes = plt.subplots(1, 2, figsize=(20, 6))
-        #f.write(imd.dtypes)
-        imd = imd.astype({"start": int, "length":int})
-        # print(imd)
-        # print(sim_imd)
-        a = sns.scatterplot("start", "log IMD", data=imd, hue="svclass", size="size_bin", sizes=sizes, size_order=size_order, legend="full", ax=axes[0]).set_title(sample + ": " + "chr" + str(chromosome))
-        b = sns.scatterplot("start", "log IMD", data=sim_imd, hue="svclass", size="size_bin", sizes=sizes, size_order=size_order, legend="full", ax=axes[1]).set_title(sample + ": " + "chr" + str(chromosome) + ' (Simulated)')
-        #plt.savefig(sample + "_" + chromosome +".png", dpi=150)
-        try:
-            pp.savefig(fig, dpi=150, bbox_inches='tight')
-        except ValueError:  #raised if `y` is empty.
-            f.write(file)
+                #imd.columns = ['chrom', 'Genomic Coordinate', 'sample', 'svclass', 'size_bin', 'log IMD']
+                fig, axes = plt.subplots(1, 2, figsize=(20, 6))
+                #f.write(imd.dtypes)
+
+                imd = imd.astype({"start": int, "length":int})
+                markers = {'clustered:C': "X", "non-clustered": "s", 'clustered:NC':'*'}
+                a = sns.scatterplot("start", "IMD", data=imd, hue="svclass", size="size_bin", sizes=sizes, size_order=size_order, legend="full", style="Annotation", markers=markers, ax=axes[0]).set_title(sample + ": " + "chr" + str(chromosome))
+
+                #print('Num segments: %s' % len(model.segments))
+                #plt.plot(t, v, '.', alpha=0.6)
+                for i, seg in enumerate(model.segments):
+                    t_new = [seg.start_t, seg.end_t]
+                    v_hat = [seg.predict(t) for t in t_new]
+                    axes[0].plot(t_new, v_hat, 'k-')
+                #print(sim_imd)
+                if sim_imd.shape[0] > 0: #dataframe will be empty if there are less than 6 events, so no plotting of simulations
+                    b = sns.scatterplot("start", "IMD", data=sim_imd, hue="svclass", size="size_bin", sizes=sizes, size_order=size_order, legend="full", ax=axes[1]).set_title(sample + ": " + "chr" + str(chromosome) + ' (Simulated)')
+                # print(labels)
+            pp.savefig(fig, dpi=300, bbox_inches='tight')
+            plt.close()
+            #plt.savefig(sample + "_" + chromosome +".png", dpi=150)
         pp.close()
-    f.write("Rainfall IMD plots created for " + sample)
-    f.write ("Saved IMD plots to " + output_path + sample + '_IMD_plots' + '.pdf')
 
 #currently converts annotated bedpe to old SV32 classification
 def tsv2matrix(original_df, annotated_df):
+    """This is the summary line
+
+    This is the further elaboration of the docstring. Within this section,
+    you can elaborate further on details as appropriate for the situation.
+    Notice that the summary and the elaboration is separated by a blank new
+    line.
+    """
     samples = annotated_df["sample"].unique()
     features = ['clustered_del_1-10Kb', 'clustered_del_10-100Kb', 'clustered_del_100Kb-1Mb', 'clustered_del_1Mb-10Mb', 'clustered_del_>10Mb', 'clustered_tds_1-10Kb', 'clustered_tds_10-100Kb', 'clustered_tds_100Kb-1Mb', 'clustered_tds_1Mb-10Mb', 'clustered_tds_>10Mb', 'clustered_inv_1-10Kb', 'clustered_inv_10-100Kb', 'clustered_inv_100Kb-1Mb', 'clustered_inv_1Mb-10Mb', 'clustered_inv_>10Mb', 'clustered_trans', 'non-clustered_del_1-10Kb', 'non-clustered_del_10-100Kb', 'non-clustered_del_100Kb-1Mb', 'non-clustered_del_1Mb-10Mb', 'non-clustered_del_>10Mb', 'non-clustered_tds_1-10Kb', 'non-clustered_tds_10-100Kb', 'non-clustered_tds_100Kb-1Mb', 'non-clustered_tds_1Mb-10Mb', 'non-clustered_tds_>10Mb', 'non-clustered_inv_1-10Kb', 'non-clustered_inv_10-100Kb', 'non-clustered_inv_100Kb-1Mb', 'non-clustered_inv_1Mb-10Mb', 'non-clustered_inv_>10Mb', 'non-clustered_trans']
 
@@ -425,7 +494,7 @@ def tsv2matrix(original_df, annotated_df):
             else:
                 channel = "non-clustered_" + row.svclass
 
-        #if either breakpoint in he pair of breakpints is annotated as clustered, the enitre event is considered clustered
+        #if either breakpoint in the pair of breakpints is annotated as clustered, the enitre event is considered clustered
         if channel1 != '':
             channel=channel1
         if channel2 != '':
@@ -442,98 +511,81 @@ def tsv2matrix(original_df, annotated_df):
 
     return nmf_matrix
 
-counts = {} #master dictionary that stores sample: channel
-#sample_files = ["~/iCloud/dev/SVMatrixGenerator/data/560_Breast/PD8660a2.560_breast.rearrangements.n560.bedpe.tsv"]
-
-#PCAWG MELANOMA
-# sample_files = []
-# for file in os.listdir("/Users/azhark/iCloud/dev/SVMatrixGenerator/data/PCAWG/SV/MELA-AU/"):
-#     if file.endswith(".bedpe.tsv"):
-#         sample_files.append(file)
-
-#MESOTHELIA SAMPLES
-# sample_files = []
-# for file in os.listdir('/Users/azhark/iCloud/dev/Mesothelia-Tumors/data/SV_MESO_release_22012020/'):
-#     if file.endswith(".consensus.sur.bedpe.tsv"):
-#         sample_files.append(file)
-
-#560 BREAST SAMPLES
-# sample_files = []
-# for file in os.listdir('/Users/azhark/iCloud/dev/HRD-Signatures/data/560_Breast/'):
-#     if file.endswith(".n560.bedpe.tsv"):
-#         sample_files.append(file)
-
-#os.chdir('/Users/azhark/iCloud/dev/HRD-Signatures/data/560_Breast/')
-#os.chdir("/Users/azhark/iCloud/dev/Mesothelia-Tumors/data")
-#os.chdir("/Users/azhark/iCloud/dev/SVMatrixGenerator/data/PCAWG/SV/MELA-AU")
-#os.chdir('/Users/azhark/iCloud/dev/Mesothelia-Tumors/data/SV_MESO_release_22012020/')
-
 num_events = []
 clustered_p = []
 num_segments = []
 equal_dist_p = []
-interleaved_frac = []
 
-#KEY PARAMETERS
-clustered_cutoff = 0.01 #fraction of cases from simulations where we see an average IMD equal to or less than the observed IMD
-interleaved_cutoff = 0.85 #fraction of events that have to be in the interleaved configuration in order to count as chromothripsis
-num_simulations = 1000 #of simulations
+sampleToEvents = {} #contains the annotated bedpe for each sample for plotting purposes
+def annotateBedpe(project, file, output_path):
+    """This is the summary line
 
-#PCF PARAMETERS (these parameters affect the segmentation)
-
-output_path = "/Users/azhark/iCloud/dev/SVMatrixGenerator/results/"
-#sample_files = ["/Users/azhark/iCloud/dev/SVMatrixGenerator/data/Melanoma_chromo_DO220896.bedpe.tsv"]
-#input is a list of bedpe files for a given cohort of samples
-
-if __name__ == "__main__":
-    project = "Mesothelia"
-    #project = "560-Breast"
+    This is the further elaboration of the docstring. Within this section,
+    you can elaborate further on details as appropriate for the situation.
+    Notice that the summary and the elaboration is separated by a blank new
+    line.
+    """
     samples = set([])
     all_segments = [] #all segment df's with complete annotation
     sim_dist = [] #distribution of average IMD from all simulations
     observed_dist = []
-    #process bedpe
-    file = "/Users/azhark/iCloud/dev/Mesothelia-Tumors/data/MESO.all.bedpe"
-    #file = "/Users/azhark/iCloud/dev/HRD-Signatures/data/560_Breast/560_breast.rearrangements.bedpe"
-    #file = "/Users/azhark/iCloud/dev/SVMatrixGenerator/data/PCAWG/SV/MELA-AU_SV.bedpe.tsv"
+
     data = pd.read_csv(file, sep="\t") #bedpe file format: chrom1, start1, end1, chrom2, start2, end2, strand1, strand2, svclass(optional), sample
     data = processBEDPE(data)
     print("Creating structural variant matrix for the " + str(data["sample"].nunique()) + " samples in " + project)
     with open(output_path + project + '.SV32.log', 'w') as f: #log file which contains information about results
         for sample in data["sample"].unique():
+            
+            plotting_dfs = []
+            sim_plotting_dfs = []
+            plotting_models = []
             f.write("STARTING ANALYSIS FOR " + str(sample) + "..." + "/n")
             df = data[data["sample"] == sample]
-            df = df.reset_index()
+            #df = df.reset_index()
             samples.add(sample)
-            #track samples
-            # print(df["svclass"].value_counts())
-            # if sample == "MESO_003_T1":
-            #     df.to_csv("/Users/azhark/iCloud/dev/SVMatrixGenerator/results/FUCKING_BUG.tsv", sep="\t", index=False)
-            df = processBEDPE(df) #reformat bedpe file
+            #print(df)
 
             all_chroms = set(list(df.chrom1.unique()) + list(df.chrom2.unique())) #all chromosomes with events on them
 
             for i, chromosome in enumerate(all_chroms): #apply PCF on a chromosome by chromosome basis
-
-                f.write("Analyzing SV's on for " + str(sample) + "on chromosome " + str(chromosome))
+                sample_segments = []
+                #f.write("Analyzing SV's on for " + str(sample) + "on chromosome " + str(chromosome))
                 chrom_df = df[(df.chrom1 == chromosome) | (df.chrom2 == chromosome)]
-                if chrom_df.shape[0] > 10:
+
+                if chrom_df.shape[0] >= 10:
                     num_events.append(chrom_df.shape[0])
                     chrom_df.reset_index(drop=True, inplace=True)
-                    imd_df = computeIMD(chrom_df) #table with all breakpoints considered individually and IMD calculated
+
+                    imd_df = computeIMD(chrom_df, chromosome)
+                    imd_df = imd_df.sort_values(by=['start'], ascending=True) #table with all breakpoints considered individually and IMD calculated
                     f.write("Starting simulations")
 
                     #produce n simulated dataframes where everything in the input data is kept the same except for the genomic location of the SV
                     sim_dfs = simulateBedpe(chrom_df, num_simulations, chromosome)
                     for i in range(len(sim_dfs)):
-                        sim_dfs[i] = computeIMD(sim_dfs[i])
-                        sim_dist.append(np.mean(np.array(sim_dfs[i]["IMD"])))
+                        sim_dfs[i] = computeIMD(sim_dfs[i], chromosome)
+                        sim_df = sim_dfs[i]
+                        x = list(sim_df.start)
+                        y = list(sim_df.IMD)
+                        sim_model = piecewise(x, y)
+                        #print(len(model.segments))
+                        for i in range(len(sim_model.segments)):
+                            start = int(sim_model.segments[i].start_t)
+                            end = int(sim_model.segments[i].end_t)
+                            segment_df = sim_df[(sim_df['start'] >= start) & (sim_df['start'] <= end)]
+
+                            log_imd = []
+                            for v in np.array(sim_df["IMD"]):
+                                if v > 0:
+                                    log_imd.append(math.log10(v))  
+                                else:
+                                    log_imd.append(0)
+                            sim_df["log IMD"] = log_imd
+
+                            null_dist.append(np.mean(sim_df['log IMD']))
 
 
-                    #plotIMD(imd_df, sim_dfs[0], sample, chromosome, "/Users/azhark/iCloud/dev/SVMatrixGenerator/plots/") #creates rainfall plot pdf for each chromosome for given sample
-
-                    f.write("Finished running simulations")
-
+                    #f.write("Finished running simulations")
                     #plt.hist(null_dist)
                     #APPLY PCF
                     #f.write("Applying PCF")
@@ -541,27 +593,59 @@ if __name__ == "__main__":
                     y = list(imd_df.IMD)
                     model = piecewise(x, y)
 
-                    f.write("Finished applying PCF")
-                    #a = piecewise_plot(x, y, model=model)
-                    #a.savefig("/Users/azhark/iCloud/dev/SVMatrixGenerator/plots/pcf/" + sample + chromosome + ".png", dpi=200)
+                    #plotIMD(imd_df, sim_dfs[0], sample, chromosome, "/Users/azhark/iCloud/dev/SVMatrixGenerator/plots/", model) #creates rainfall plot pdf for each chromosome for given sample
+
+                    #f.write("Finished applying PCF")
+                    # p = piecewise_plot(x, y, model=model)
+                    # p.savefig("/Users/azhark/iCloud/dev/SVMatrixGenerator/plots/pcf/" + sample + chromosome + ".png", dpi=200)
                     for i in range(len(model.segments)):
                         f.write("Analyzing segment " + str(i))
                         start = int(model.segments[i].start_t)
                         end = int(model.segments[i].end_t)
                         segment_df = imd_df[(imd_df['start'] >= start) & (imd_df['start'] <= end)]
-                        null_dist = [] #null distribution of average inter-mutational distances derived from simulations
-                        for sim_df in sim_dfs:
-                            sim_df = sim_df.iloc[:segment_df.shape[0]]
-                            null_dist.append(np.mean(sim_df['IMD']))
-                        null_dist = np.array(null_dist)
-                        segAvgIMD = np.mean(np.array(segment_df["IMD"])) #mean IMD in this segment is our measure of interest
-                        assert(len(null_dist > 0))
-                        p_clustered = np.sum(null_dist <= segAvgIMD) / len(null_dist)
-                        clustered_p.append(p_clustered) #fraction of cases where simulated mean IMD is equal to or lower than observed average IMD in the segment
-                        f.write("The probability that these " + str(segment_df.shape[0]) + " events on chromosome " + str(chromosome) + " in segment # " + str(i) + " are clustered by chance is " + str(p_clustered))
-                        #clustered_p.append(p)
+                        if segment_df.shape[0] >= min_seg_events:
+                            segment_df = segment_df.sort_values(by=['start'], ascending=True)
+            #               # print(sample, chromosome, str(i+1), start, end)
+            #               # print(segment_df)
+                            # sim_dfs = simulateBedpe(chrom_df[(chrom_df['start1'] >= start) & (chrom_df['start1'] <= end)], num_simulations, chromosome)
+                            # for i in range(len(sim_dfs)):
+                            #   sim_dfs[i] = computeIMD(sim_dfs[i], chromosome)
+            #                 sim_dist.append(np.mean(np.array(sim_dfs[i]["IMD"])))
+                            null_dist = [] #null distribution of average inter-mutational distances derived from simulations
+                            for sim_df in sim_dfs:
 
-                        if p_clustered <= clustered_cutoff:
+                                log_imd = []
+                                for v in np.array(sim_df["IMD"]):
+                                    if v > 0:
+                                        log_imd.append(math.log10(v))  
+                                    else:
+                                        log_imd.append(0)
+                                sim_df["log IMD"] = log_imd
+
+                                null_dist.append(np.mean(sim_df['log IMD']))
+                                
+                            null_dist = np.array(null_dist)
+
+
+                            log_imd = []
+                            for v in np.array(segment_df["IMD"]):
+                                if v > 0:
+                                    log_imd.append(math.log10(v))  
+                                else:
+                                    log_imd.append(0)
+
+                            segment_df["log IMD"] = log_imd
+
+                            segAvgIMD = np.mean(np.array(segment_df["log IMD"])) #mean IMD in this segment is our measure of interest
+                            assert(len(null_dist > 0))
+                            p_clustered = np.sum(null_dist <= segAvgIMD) / len(null_dist)
+                            clustered_p.append(p_clustered) #fraction of cases where simulated mean IMD is equal to or lower than observed average IMD in the segment
+                            #f.write("The probability that these " + str(segment_df.shape[0]) + " events on chromosome " + str(chromosome) + " in segment # " + str(i) + " are clustered by chance is " + str(p_clustered))
+                        else: #make p-value really large so everything is considered unclustered
+                            p_clustered = p_clustered + clustered_cutoff 
+            #           #clustered_p.append(p)
+
+                        if p_clustered <= clustered_cutoff: #simulation derived p-value
                             #CLUSTERED, so apply additional chromothripsis criteria
                             f.write("There is clustering on chromosome " + str(chromosome) + " between " + str(start) + " and " + str(end))
                             f.write("Now applying additional chromothripsis criteria")
@@ -570,8 +654,20 @@ if __name__ == "__main__":
                             annotation = ["non-clustered" for i in range(segment_df.shape[0])]
                             segment_df['Annotation'] = annotation
                         all_segments.append(segment_df)
+                        sample_segments.append(segment_df)
+                         #actual annotated df, simulated df, pcf model
+                    sim_imd = sim_dfs[0]
+
                 else: #either too few events on chromosomes or we are dealing with sex chromosomes
                     annotation = ["non-clustered" for i in range(chrom_df.shape[0])]
+
+                    #simulate just for plotting purposes
+                    if chrom_df.shape[0] > 10:
+                        sim_dfs = simulateBedpe(chrom_df, 1, chromosome) 
+                        sim_imd = computeIMD(sim_dfs[0], chromosome)
+                    else:
+                        sim_imd = pd.DataFrame()
+
                     imd = [0 for i in range(chrom_df.shape[0])]
                     config = ["interleaved" for i in range(chrom_df.shape[0])]
                     start = list(chrom_df["start1"])
@@ -584,21 +680,49 @@ if __name__ == "__main__":
                     chrom_df["start"] = start
                     chrom_df = chrom_df[["chrom", "start", "sample", "svclass", "size_bin", "length", "IMD", "Configuration", "Annotation"]]
                     all_segments.append(chrom_df)
+                    sample_segments.append(chrom_df)
+                    model = '' #for plotting function
+                # print(chromosome)
+                # print(sample_segments)
+                df2 = pd.concat(sample_segments) #annotated df for chromosome
+                #print(df2)
 
-    result_df = pd.concat(all_segments) #concatenate all individual segment dataframes into one large result dataframe
-    result_df.head()
+                plotting_dfs.append(df2)
+                sim_plotting_dfs.append(sim_imd)
+                plotting_models.append(model)
+                # print(sim_imd)
+                # print(model)
+            
+            sampleToEvents[sample] = (plotting_dfs, sim_plotting_dfs, plotting_models)
+            
+    pickle.dump(sampleToEvents, open("/Users/azhark/iCloud/dev/SVMatrixGenerator/plots/" + project + "_sampleToEvents.pickle", 'wb'))
+    #plotIMD(sampleToEvents, "/Users/azhark/iCloud/dev/SVMatrixGenerator/plots/")
+    # rainfallPlot = plotIMD(sampleToEvents, "/Users/azhark/iCloud/dev/SVMatrixGenerator/plots/") #creates rainfall plot pdf for each chromosome for given sample
+    # rainfallPlot.savefig(project + "_" + sample + '_IMD_plots' + '.pdf', dpi=300)
+    # print("Rainfall IMD plots created for " + sample)
+    # print("Saved IMD plots to " + output_path + project + "_" + sample + '_IMD_plots' + '.pdf')
+    result_df = pd.concat(all_segments)
+    return result_df, data
 
+#PCF PARAMETERS (these parameters affect the segmentation)
+clustered_cutoff = 0.01 #fraction of cases from simulations where we see an average IMD equal to or less than the observed IMD
+interleaved_cutoff = 0.75 #fraction of events that have to be in the interleaved configuration in order to count as chromothripsis
+num_simulations = 100 #of simulations
+min_seg_events = 4 #minimum amount of breakpoints in the pcf segment
+
+file = "/Users/azhark/iCloud/dev/Mesothelia-Tumors/data/MESO.all.bedpe"
+#file = "/Users/azhark/iCloud/dev/HRD-Signatures/data/560_Breast/560_breast.rearrangements.bedpe"
+#file = "/Users/azhark/iCloud/dev/SVMatrixGenerator/data/PCAWG/SV/MELA-AU_SV.bedpe.tsv"
+project = "Mesothelia-Tumors"
+output_path = "/Users/azhark/iCloud/dev/SVMatrixGenerator/results/"
+
+if __name__ == "__main__":
+
+    result_df, original_df = annotateBedpe(project, file, output_path)
     #save annotated dataframe for given sample
     result_df.to_csv("/Users/azhark/iCloud/dev/SVMatrixGenerator/results/" + project + ".annotated.bedpe.tsv", sep="\t", index=False)
-
-    df.head()
-
-    matrix = tsv2matrix(df, result_df) #matrix for NMF
+    matrix = tsv2matrix(original_df, result_df) #matrix for NMF
     matrix.reset_index().to_csv("/Users/azhark/iCloud/dev/SVMatrixGenerator/results/" + project + ".matrix.tsv", sep="\t", index=False)
-
-matrix.head()
-
-result_df["svclass"].value_counts()
 
 def plotSV(matrix_path, output_path, project, plot_type="pdf", percentage=False, aggregate=False):
     """Outputs a pdf containing Rearrangement signature plots
@@ -760,7 +884,6 @@ def plotSV(matrix_path, output_path, project, plot_type="pdf", percentage=False,
             counts = list(df[col])
             counts = [(x/sum(counts))*100 for x in counts]
             assert(len(counts)) == 32
-            assert(len(labels)) == 32
             plot(counts, labels, sample, project, percentage)
     pp.close()
 
@@ -770,6 +893,13 @@ def plotSV(matrix_path, output_path, project, plot_type="pdf", percentage=False,
 
 #compare two rearrangement matrices(produced by different tools for example)
 def compareInputMatrix(df1, df2):
+    """This is the summary line
+
+    This is the further elaboration of the docstring. Within this section,
+    you can elaborate further on details as appropriate for the situation.
+    Notice that the summary and the elaboration is separated by a blank new
+    line.
+    """
     cos_sim = []
     df1 = df1.iloc[:, 1:]
     df2 = df2.iloc[:, 1:]
@@ -793,15 +923,15 @@ def compareInputMatrix(df1, df2):
 # meso2 = pd.read_csv("/Users/azhark/iCloud/dev/SVMatrixGenerator/results/Mesothelia.rearrangements.bedpe.STL.matrix.tsv", sep="\t")
 # meso = compareInputMatrix(meso1, meso2)
 #f.write(meso2.shape)
-plt.hist(meso, bins=10, align='left', color='b', edgecolor='red',
-              linewidth=1)
-
-matrix.reset_index().head()
-#SigProfiler
-matrix_path = "/Users/azhark/iCloud/dev/SVMatrixGenerator/results/" + project + ".matrix.tsv"
-output_path = "/Users/azhark/iCloud/dev/SVMatrixGenerator/results/"
-project = "Mesothelia_SV32_SigProfiler"
-plotSV(matrix_path, output_path, project, plot_type="pdf", percentage=False, aggregate=True)
+# plt.hist(meso, bins=10, align='left', color='b', edgecolor='red',
+#               linewidth=1)
+#
+# matrix.reset_index().head()
+# #SigProfiler
+# project = "PCAWG-MELA-AU"
+# matrix_path = "/Users/azhark/iCloud/dev/SVMatrixGenerator/results/" + project + ".matrix.tsv"
+# output_path = "/Users/azhark/iCloud/dev/SVMatrixGenerator/results/"
+# plotSV(matrix_path, output_path, project, plot_type="pdf", percentage=False, aggregate=True)
 
 #SignatureToolsLib
 # matrix_path = "/Users/azhark/iCloud/dev/Mesothelia-Tumors/data/Mesothelia.rearrangements.bedpe.STL.matrix.tsv"
@@ -814,28 +944,28 @@ plotSV(matrix_path, output_path, project, plot_type="pdf", percentage=False, agg
 # null_dist.hist()
 # plt.hist(clustered_p)
 #
-result_df = pd.read_csv("/Users/azhark/iCloud/dev/SVMatrixGenerator/results/Mesothelia.annotated.bedpe.tsv", sep="\t")
-svclass_counts = result_df.Annotation.value_counts()
-plt.figure(figsize=(3,2))
-sns.barplot(svclass_counts.index, svclass_counts.values, alpha=0.8)
-plt.title('Mesothelia Classifciation')
-plt.ylabel('Frequency', fontsize=12)
-plt.xlabel('Annotation', fontsize=12)
-plt.xticks(
-    rotation=45,
-    horizontalalignment='right',
-    fontweight='light',
-    fontsize='small'
-)
+# result_df = pd.read_csv("/Users/azhark/iCloud/dev/SVMatrixGenerator/results/Mesothelia.annotated.bedpe.tsv", sep="\t")
+# svclass_counts = result_df.Annotation.value_counts()
+# plt.figure(figsize=(3,2))
+# sns.barplot(svclass_counts.index, svclass_counts.values, alpha=0.8)
+# plt.title('Mesothelia Classifciation')
+# plt.ylabel('Frequency', fontsize=12)
+# plt.xlabel('Annotation', fontsize=12)
+# plt.xticks(
+#     rotation=45,
+#     horizontalalignment='right',
+#     fontweight='light',
+#     fontsize='small'
+# )
+#
+# plt.show()
+# actual_df = pd.read_csv("/Users/azhark/iCloud/dev/Mesothelia-Tumors/data/Mesothelia.rearrangements.bedpe.STL.matrix.tsv", sep="\t")
+# c = actual_df.iloc[0:16, :]
+# nc = actual_df.iloc[16:, :]
+# nc.iloc[:, 1:].to_numpy().sum()
 
-plt.show()
-actual_df = pd.read_csv("/Users/azhark/iCloud/dev/Mesothelia-Tumors/data/Mesothelia.rearrangements.bedpe.STL.matrix.tsv", sep="\t")
-c = actual_df.iloc[0:16, :]
-nc = actual_df.iloc[16:, :]
-nc.iloc[:, 1:].to_numpy().sum()
-
-for c in actual_df.iloc[:, 0]:
-    if
+# for c in actual_df.iloc[:, 0]:
+#     if
 
 #'chrom', 'Genomic Coordinate', 'sample', 'svclass', 'size_bin', "length", 'log IMD'
 
